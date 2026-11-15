@@ -1,0 +1,78 @@
+
+
+import { GAME_FONT } from "./font.js";
+
+const BUTTON_FONT = GAME_FONT;
+const BUTTON_TEXT_SIZE = 36;
+// Plain numbers here, not vec2(): this file is imported before kaplay() has run
+const BUTTON_PADDING = { x: 48, y: 28 };   // extra room around the text when auto-sizing (total, both sides)
+const BUTTON_MIN_SIZE = { x: 128, y: 64 }; // auto-sized buttons are never smaller than this
+
+/**
+ * Adds a clickable button, centred on `p`.
+ * @param {string} txt text on the button
+ * @param {import("kaplay").Vec2} p centre of the button
+ * @param {import("kaplay").Vec2 | null} s size of the button; pass null to fit the size to the text
+ * @param {() => void} f called when the button is clicked
+ */
+export function addButton(
+    txt = "start game",
+    p = vec2(200, 100),
+    s = null,
+    f = () => debug.log("hello"),
+) {
+    // No size given: measure the text and wrap the button around it
+    if (!s) {
+        const measured = formatText({ text: txt, font: BUTTON_FONT, size: BUTTON_TEXT_SIZE });
+        s = vec2(
+            Math.max(BUTTON_MIN_SIZE.x, measured.width + BUTTON_PADDING.x),
+            Math.max(BUTTON_MIN_SIZE.y, measured.height + BUTTON_PADDING.y),
+        );
+    }
+
+    // add a parent background object
+    const btn = add([
+        rect(s.x, s.y, { radius: 8 }),
+        pos(p),
+        area(),
+        scale(1),
+        rotate(0), // gives the button an angle we can animate
+        anchor("center"),
+        outline(4),
+        color(255, 255, 255),
+    ]);
+
+    // add a child object that displays the text
+    btn.add([
+        text(txt, {
+            font: BUTTON_FONT,
+            size: BUTTON_TEXT_SIZE,
+        }),
+        
+        anchor("center"),
+        color(0, 0, 0),
+    ]);
+
+    // onHoverUpdate() comes from area() component
+    // it runs every frame when the object is being hovered
+    btn.onHoverUpdate(() => {
+        // rock gently back and forth: sin() swings between -1 and 1 over time
+        // 4 = speed of the wobble, 5 = max tilt in degrees
+        btn.angle = Math.sin(time() * 4) * 5;
+        btn.scale = vec2(1.2);
+        setCursor("pointer");
+    });
+
+    // onHoverEnd() comes from area() component
+    // it runs once when the object stopped being hovered
+    btn.onHoverEnd(() => {
+        btn.scale = vec2(1);
+        btn.angle = 0; // straighten back up
+    });
+
+    // onClick() comes from area() component
+    // it runs once when the object is clicked
+    btn.onClick(f);
+
+    return btn;
+}
