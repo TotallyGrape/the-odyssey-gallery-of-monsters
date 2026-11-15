@@ -1,7 +1,13 @@
 import kaplay from "kaplay";
 import "kaplay/global"; // types for the prefix-free functions (add, pos, vec2, setCursor, ...) in every file
 import { addButton } from "./button.js";
-import { newBattleState, getChoices, resolveChoice } from "./encounter.js";
+import {
+    newBattleState, resolveMove, checkOptions, fallbackOptions, matchSpeech, isAvailable, getMove,
+    TIERS, QUALITIES, NO_MOVE,
+} from "./encounter.js";
+import { requestTurn, requestSpeech } from "./ai.js";
+import { prepareNarration, whenNarrationDone } from "./narration.js";
+import { openSpeakInput } from "./speakInput.js";
 import { CYCLOPS } from "./bosses/cyclops.js";
 import { SCYLLA } from "./bosses/scylla.js";
 import { GIANTS } from "./bosses/giants.js";
@@ -13,6 +19,9 @@ import { BORDER_WIDTH, addGameBorder } from "./border.js";
 import { addEndScreens, fadeToEndScreen } from "./endScreens.js";
 import { loadMainMenu, addMainMenu } from "./mainMenu.js";
 import { addStoryScene, showStory } from "./transition.js";
+import { loadMusicTracks, playSceneMusic } from "./music.js";
+import { addSettingsButton, settingsBlocksInput } from "./settings.js";
+import { playSfx } from "./sfx.js";
 
 
 // The levels, in the order they are played. Reorder, add or remove bosses here.
@@ -45,6 +54,7 @@ k.loadRoot("./"); // A good idea for Itch.io publishing later
 
 // Asset loading must come after kaplay() - the load functions don't exist before it
 loadGameFont(); // the font is chosen in src/font.js
+loadMusicTracks();
 k.loadBean(); // built-in "bean" sprite; put your own art in public/sprites and use k.loadSprite()
 k.setGravity(1600);
 
@@ -56,6 +66,7 @@ loadSprite("tung", "examples/sprites/tung.png");
 // Boss pictures. Each boss file names the one it uses in its `sprite` field.
 loadSprite("cyclops", "assets/Cyclops.png");
 loadSprite("scylla", "assets/Scylla.png");
+loadSprite("giants", "assets/Giants.png");
 
 loadSprite("frame", "assets/picture-frame-427233_1280.jpg");
 
@@ -105,6 +116,7 @@ addMainMenu(() => {
 });
 
 scene("battle", (/** @type {import("./encounter.js").Boss} */ boss) => {
+    playSceneMusic(boss === CYCLOPS ? "cyclops" : "giantsScylla");
     // Painting frame, added first so the boss picture is drawn on top of its blank centre
     const frame = add([
         sprite("frame"),
@@ -137,9 +149,21 @@ scene("battle", (/** @type {import("./encounter.js").Boss} */ boss) => {
     const picCenter = pic.pos.add(0, BOSS_PIC_HEIGHT / 2);
 
     addGameBorder(); // white frame around the game area (src/border.js)
+    addSettingsButton(); // top right; opens the volume overlay (src/settings.js)
 
     // ---- Fight state ----
     let state = newBattleState(boss);
+    let alive = true; // false once this scene has been left; late AI answers are then ignored
+    onSceneLeave(() => (alive = false));
+
+    /** What has been said and done so far, so the narrator can keep the story continuous. */
+    /** @type {import("./ai.js").HistoryTurn[]} */
+    const history = [];
+    /** The FIGHT and FLEE options for the coming turn (from the AI, checked against the rules). */
+    let options = {
+        fight: fallbackOptions(boss, state, "fight"),
+        flee: fallbackOptions(boss, state, "flee"),
+    };
 
     // ---- Status line (top left) ----
     const status = add([
@@ -154,7 +178,11 @@ scene("battle", (/** @type {import("./encounter.js").Boss} */ boss) => {
     // ---- Text box with rolling text (bottom) ----
     const TEXTBOX_SIZE = vec2(1000, 150);
     const TEXTBOX_POS = vec2(k.width() / 2, k.height() - 110);
-    const ROLL_INTERVAL = 0.02; // seconds per letter
+    const TEXT_WIDTH = TEXTBOX_SIZE.x - 60;
+    const TEXT_SIZES = [28, 26, 24, 22, 20]; // a message uses the largest of these that fits the box
+    const TEXT_MAX_HEIGHT = TEXTBOX_SIZE.y - 24;
+    const ROLL_INTERVAL = 0.02;     // seconds per letter when there is no voice to keep pace with
+    const ROLL_INTERVAL_MAX = 0.06; // slowest the letters go when keeping pace with the narrator
 
     add([
         rect(TEXTBOX_SIZE.x, TEXTBOX_SIZE.y, { radius: 8 }),
@@ -171,8 +199,8 @@ scene("battle", (/** @type {import("./encounter.js").Boss} */ boss) => {
     const rollText = add([
         text("", {
             font: GAME_FONT,
-            size: 28,
-            width: TEXTBOX_SIZE.x - 60,
+            size: TEXT_SIZES[0],
+            width: TEXT_WIDTH,
             align: "center",
             // letters past lettersShown are invisible, which gives the typewriter effect
             transform: (idx) => ({ opacity: idx < lettersShown ? 1 : 0 }),
@@ -182,20 +210,33 @@ scene("battle", (/** @type {import("./encounter.js").Boss} */ boss) => {
         color(0, 0, 0),
     ]);
 
+    /** Puts a message in the text box at the largest size that fits. */
+    function setBoxText(/** @type {string} */ message) {
+        const size = TEXT_SIZES.find((s) =>
+            formatText({ text: message, font: GAME_FONT, size: s, width: TEXT_WIDTH, align: "center" }).height <= TEXT_MAX_HEIGHT)
+            ?? TEXT_SIZES[TEXT_SIZES.length - 1];
+        rollText.textSize = size;
+        rollText.text = message;
+    }
+
     /**
      * Types a message into the text box one letter at a time.
      * Don't use square brackets in messages: KAPLAY reads them as style tags.
      * @param {string} message
      * @param {() => void} [onDone] called once the whole message is showing
+     * @param {number} [interval] seconds per letter
      */
-    function text_roll(message, onDone) {
+    function text_roll(message, onDone, interval = ROLL_INTERVAL) {
         finishRoll(); // if something is still rolling, complete it first
-        rollText.text = message;
+        stopThinking();
+        setBoxText(message);
         lettersShown = 0;
         rolling = true;
 
-        const writing = loop(ROLL_INTERVAL, () => {
+        const TYPE_SOUND_EVERY = 3; // a tick every this many letters
+        const writing = loop(interval, () => {
             lettersShown++;
+            if (lettersShown % TYPE_SOUND_EVERY === 0) playSfx("type");
             if (lettersShown >= message.length) finishRoll();
         });
         finishRoll = () => {
@@ -208,37 +249,85 @@ scene("battle", (/** @type {import("./encounter.js").Boss} */ boss) => {
     }
 
     // SPACE or a click skips to the end of the message
-    onKeyPress("space", () => finishRoll());
-    onClick(() => finishRoll());
+    // (ignored while the settings overlay is open, or when the click is on the SETTINGS button)
+    onKeyPress("space", () => { if (!settingsBlocksInput()) finishRoll(); });
+    onClick(() => { if (!settingsBlocksInput()) finishRoll(); });
+
+    // ---- "Thinking" line: shown in the text box while the AI is working ----
+    const THINKING_SIZE = 22;
+    const THINKING_DOTS = 3;
+    const THINKING_DOT_TIME = 0.35; // seconds per dot
+    let thinking = "";              // the line being shown, or "" when not waiting
+    const thinkingText = add([
+        text("", { font: GAME_FONT, size: THINKING_SIZE }),
+        pos(TEXTBOX_POS.x, TEXTBOX_POS.y + 44),
+        anchor("left"),
+        color(0, 0, 0),
+        opacity(0.6),
+    ]);
+    thinkingText.onUpdate(() => {
+        if (!thinking) return;
+        thinkingText.text = thinking + ".".repeat(1 + (Math.floor(time() / THINKING_DOT_TIME) % THINKING_DOTS));
+    });
+
+    /**
+     * Shows what the player just chose, with a waiting line under it, until the next text_roll.
+     * @param {string} headline what was chosen or said ("" for none)
+     * @param {string} waiting  e.g. "The Muse weighs your words"
+     */
+    function showThinking(headline, waiting) {
+        setBoxText(headline);
+        lettersShown = headline.length;
+        rollText.pos.y = TEXTBOX_POS.y - (headline ? 18 : 0);
+        thinking = waiting;
+        // Left-anchored and centred by its full width, so the growing dots don't make it jitter
+        const full = formatText({ text: waiting + ".".repeat(THINKING_DOTS), font: GAME_FONT, size: THINKING_SIZE }).width;
+        thinkingText.pos = vec2(TEXTBOX_POS.x - full / 2, TEXTBOX_POS.y + (headline ? 44 : 0));
+        thinkingText.hidden = false;
+    }
+    function stopThinking() {
+        thinking = "";
+        thinkingText.hidden = true;
+        thinkingText.text = "";
+        rollText.pos.y = TEXTBOX_POS.y;
+    }
+    stopThinking();
 
     // ---- Menus ----
-    const MENU_Y = k.height() / 2 + 30;     // centre of the first row of buttons
+    const MENU_Y = k.height() / 2 + 30;     // centre of the first row of buttons (menus of three or more rows start higher)
     const MENU_GAP = 32;                    // space between buttons in a row
     const MENU_ROW_STEP = 84;               // distance from one row to the next
+    const MENU_ROWS_BELOW = 2;              // rows that fit between MENU_Y and the text box
     const MENU_MAX_WIDTH = k.width() - 120; // a row wider than this wraps onto a new row
     const HIT_REFERENCE = 10;               // HP loss that counts as a "normal" hit for the hit effect
+    const END_WAIT_MAX = 30;                // most seconds to wait for the narrator before the end screen
     /** @type {import("kaplay").GameObj[]} */
     let menuButtons = [];
     let menuVersion = 0; // lets a newer showMenu/hideMenu cancel an older pending one
+    /** @type {{ close: () => void } | null} */
+    let speakPanel = null;
 
     function hideMenu() {
         menuVersion++;
         for (const b of menuButtons) b.destroy();
         menuButtons = [];
+        speakPanel?.close();
+        speakPanel = null;
     }
 
     /**
      * Replaces the buttons on screen with centred rows, each button sized to fit its label.
      * Buttons that don't fit on a row wrap onto the next one.
-     * @param {{ label: string, onPick: () => void }[]} options
+     * @param {{ label: string, onPick: () => void }[]} choices
      */
-    function showMenu(options) {
+    function showMenu(choices) {
         hideMenu();
         const version = menuVersion;
         // Build on the next frame, so the click that opened this menu can't also press a new button
         wait(0, () => {
             if (version !== menuVersion) return;
-            menuButtons = options.map((o) => addButton(o.label, vec2(0, MENU_Y), null, o.onPick));
+            menuButtons = choices.map((o) =>
+                addButton(o.label, vec2(0, MENU_Y), null, o.onPick, { sound: o.label === "BACK" ? "back" : "click" }));
 
             // Split the buttons into rows that fit the screen
             /** @type {import("kaplay").GameObj[][]} */
@@ -256,12 +345,13 @@ scene("battle", (/** @type {import("./encounter.js").Boss} */ boss) => {
                 }
             }
 
-            // Centre each row
+            // Centre each row. Extra rows are added above, so the last one never covers the text box.
+            const firstRowY = MENU_Y - Math.max(0, rows.length - MENU_ROWS_BELOW) * MENU_ROW_STEP;
             rows.forEach((row, i) => {
                 const total = row.reduce((sum, b) => sum + b.width, 0) + MENU_GAP * (row.length - 1);
                 let x = k.width() / 2 - total / 2;
                 for (const b of row) {
-                    b.pos = vec2(x + b.width / 2, MENU_Y + i * MENU_ROW_STEP);
+                    b.pos = vec2(x + b.width / 2, firstRowY + i * MENU_ROW_STEP);
                     x += b.width + MENU_GAP;
                 }
             });
@@ -270,52 +360,145 @@ scene("battle", (/** @type {import("./encounter.js").Boss} */ boss) => {
 
     function showMainMenu() {
         showMenu([
-            { label: "FIGHT", onPick: () => choose("fight") },
-            { label: "SPEAK", onPick: () => choose("speak") },
-            { label: "FLEE", onPick: () => choose("flee") },
+            { label: "FIGHT", onPick: () => showOptions("fight") },
+            { label: "SPEAK", onPick: showSpeakPanel },
+            { label: "FLEE", onPick: () => showOptions("flee") },
         ]);
     }
 
     /**
-     * A main button was pressed: show the choices the boss offers for it as buttons (plus BACK).
-     * A lone choice with no label means there is nothing to choose, so it just happens.
-     * @param {import("./encounter.js").Action} action
+     * FIGHT or FLEE was pressed: show this turn's options for it as buttons (plus BACK).
+     * @param {"fight" | "flee"} action
      */
-    function choose(action) {
-        const choices = getChoices(boss, state, action);
-        if (choices.length === 0) return;
-        if (choices.length === 1 && choices[0].label === null) {
-            act(choices[0]);
-            return;
-        }
+    function showOptions(action) {
         showMenu([
-            ...choices.map((c) => ({ label: c.label ?? "...", onPick: () => act(c) })),
+            ...options[action].map((option) => ({
+                label: option.label,
+                onPick: () => playTurn({ move: option.move, grade: TIERS[option.tier], tier: option.tier, label: option.label }),
+            })),
             { label: "BACK", onPick: showMainMenu },
         ]);
     }
 
+    /** SPEAK was pressed: open the box where the player types what they say or do (src/speakInput.js). */
+    function showSpeakPanel() {
+        hideMenu();
+        const version = menuVersion;
+        // Open on the next frame, so the click on SPEAK can't also press one of the panel's buttons
+        wait(0, () => {
+            if (version !== menuVersion) return;
+            speakPanel = openSpeakInput({ onSubmit: speak, onBack: showMainMenu });
+        });
+    }
+
+    // ---- Turns ----
     /**
-     * Play the picked choice and report the result in the text box.
-     * @param {import("./encounter.js").Choice} choice
+     * Narrates a message: loads the narrator's voice for it, then types the text out in step with the voice.
+     * @param {string} message
+     * @param {() => void} onStart called at the moment the text and voice begin (apply the turn's effects here)
+     * @param {() => void} onDone  called once the whole message is showing
      */
-    function act(choice) {
+    async function tell(message, onStart, onDone) {
+        const voice = await prepareNarration(message);
+        if (!alive) return;
+        onStart();
+        let interval = ROLL_INTERVAL;
+        if (voice && voice.duration > 0) {
+            // Spread the letters over the length of the spoken line, within sensible limits
+            interval = Math.min(ROLL_INTERVAL_MAX, Math.max(ROLL_INTERVAL, (voice.duration * 0.92) / message.length));
+        }
+        voice?.play();
+        text_roll(message, onDone, interval);
+    }
+
+    /** Starts the fight: the AI sets the scene and offers the first options. */
+    async function openFight() {
+        showThinking("", "The Muse draws breath");
+        const ai = await requestTurn({ boss: boss.id, state, history, last: null });
+        if (!alive) return;
+        const opening = ai?.narration || boss.intro;
+        options = {
+            fight: checkOptions(boss, state, "fight", ai?.fight),
+            flee: checkOptions(boss, state, "flee", ai?.flee),
+        };
+        history.push({ did: "", told: opening });
+        tell(opening, () => {}, showMainMenu);
+    }
+
+    /**
+     * The player typed something under SPEAK: the AI reads it as one of the boss's moves, then the turn is played.
+     * @param {string} said
+     */
+    async function speak(said) {
+        hideMenu(); // no input while the result is being worked out
+        showThinking(`"${said}"`, "The Muse weighs your words");
+        const read = await requestSpeech({ boss: boss.id, state, history, text: said }) ?? matchSpeech(boss, state, said);
+        if (!alive) return;
+        const move = isAvailable(boss, state, read.move) ? read.move : NO_MOVE;
+        const quality = Object.prototype.hasOwnProperty.call(QUALITIES, read.quality) ? read.quality : "solid";
+        playTurn({ move, grade: QUALITIES[quality], quality, said });
+    }
+
+    /**
+     * Plays one turn: the engine works out the numbers, the AI tells it and offers the next options.
+     * @param {{ move: string, grade: import("./encounter.js").Grade, label?: string, tier?: string, said?: string, quality?: string }} pick
+     */
+    async function playTurn(pick) {
         hideMenu(); // no input while the result is being told
-        const result = resolveChoice(boss, state, choice);
-        const damageDealt = result.state.damage - state.damage;
-        const hpLost = state.hp - result.state.hp;
-        state = result.state;
-        updateStatus();
+        if (!pick.said) showThinking(pick.label ?? "", "The Fates decide");
 
-        // Enemy took damage: numbers burst out of the enemy picture
-        if (damageDealt > 0) popDamage(damageDealt, picCenter);
-        // Player took damage: gentle shake and red flash, a bit stronger for bigger hits.
-        // If the player also dealt damage, wait a beat so the two don't land at once.
-        if (hpLost > 0) wait(damageDealt > 0 ? 0.6 : 0, () => playerHitEffect(hpLost / HIT_REFERENCE));
+        const result = resolveMove(boss, state, pick.move, pick.grade);
+        const action = getMove(boss, pick.move)?.action ?? "speak";
+        const ai = await requestTurn({
+            boss: boss.id,
+            state: result.state,
+            history,
+            last: {
+                action,
+                move: pick.move,
+                label: pick.label,
+                tier: pick.tier,
+                said: pick.said,
+                quality: pick.quality,
+                text: result.text,
+                damageDealt: result.damageDealt,
+                hpLost: result.hpLost,
+                outcome: result.outcome,
+            },
+        });
+        if (!alive) return;
 
-        text_roll(result.text, () => {
+        const narration = ai?.narration || result.text;
+        if (result.outcome === "continue") {
+            options = {
+                fight: checkOptions(boss, result.state, "fight", ai?.fight),
+                flee: checkOptions(boss, result.state, "flee", ai?.flee),
+            };
+        }
+        history.push({ did: pick.said ? `"${pick.said}"` : pick.label ?? "", told: narration });
+
+        tell(narration, () => {
+            // The numbers change at the moment the result is told
+            state = result.state;
+            updateStatus();
+            // Enemy took damage: numbers burst out of the enemy picture
+            if (result.damageDealt > 0) popDamage(result.damageDealt, picCenter);
+            // Player took damage: gentle shake and red flash, a bit stronger for bigger hits.
+            // If the player also dealt damage, wait a beat so the two don't land at once.
+            if (result.hpLost > 0) wait(result.damageDealt > 0 ? 0.6 : 0, () => playerHitEffect(result.hpLost / HIT_REFERENCE));
+        }, () => {
             if (result.outcome !== "continue") {
-                // The fight is over: fade out to the death or victory screen (src/endScreens.js)
-                fadeToEndScreen(result.outcome);
+                // The fight is over. Let the narrator finish the last line (even if the text was skipped),
+                // then fade out to the death or victory screen (src/endScreens.js).
+                const outcome = result.outcome;
+                let faded = false;
+                const fade = () => {
+                    if (faded || !alive) return;
+                    faded = true;
+                    fadeToEndScreen(outcome);
+                };
+                whenNarrationDone().then(fade);
+                wait(END_WAIT_MAX, fade); // never wait longer than this, whatever the audio does
                 return;
             }
             showMainMenu();
@@ -324,7 +507,7 @@ scene("battle", (/** @type {import("./encounter.js").Boss} */ boss) => {
 
     // ---- Start ----
     updateStatus();
-    text_roll(boss.intro, showMainMenu);
+    openFight();
 
     // Kept for later use: FIGHT no longer starts this minigame.
     // Centre of the spin minigame's moving arc, in game coordinates (updated while it runs).

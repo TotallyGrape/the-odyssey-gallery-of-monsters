@@ -11,6 +11,8 @@
 import { addButton } from "./button.js";
 import { addGameBorder } from "./border.js";
 import { addTitle } from "./font.js";
+import { playSceneMusic } from "./music.js";
+import { addSettingsButton } from "./settings.js";
 
 // ---- Settings ----
 const VIDEO_FILE = "assets/menu.mp4"; // 1280x720, 30 fps, no sound (a light copy of the original)
@@ -53,6 +55,7 @@ export function loadMainMenu() {
  */
 export function addMainMenu(onPlay) {
     scene("menu", () => {
+        playSceneMusic("menu");
         // ---- Video background ----
         add([sprite(VIDEO_SPRITE), pos(0, 0)]);
         add([rect(width(), height()), color(0, 0, 0), opacity(VIDEO_DARKEN)]);
@@ -77,6 +80,7 @@ export function addMainMenu(onPlay) {
         addTitle(SUBTITLE, SUBTITLE_SIZE, vec2(SUBTITLE_POS.x, SUBTITLE_POS.y));
         addButton(PLAY_LABEL, vec2(PLAY_POS.x, PLAY_POS.y), null, onPlay);
 
+        addSettingsButton();
         addGameBorder();
     });
 }

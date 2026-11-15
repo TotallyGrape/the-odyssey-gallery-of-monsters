@@ -1,4 +1,5 @@
 import { GAME_FONT } from "./font.js";
+import { playSfx } from "./sfx.js";
 
 // Text particles: short pieces of text that burst out, fall under gravity, fade and vanish.
 // Used for damage numbers. All sizes and speeds are in game units.
@@ -75,6 +76,7 @@ export function popText(message, origin, options = {}) {
  * @param {import("kaplay").Vec2} origin where the hit landed, in game coordinates
  */
 export function popDamage(amount, origin) {
+    playSfx("hit");
     // bigger hits get bigger text, within limits
     const size = Math.min(96, 44 + amount * 0.6);
     popText(`-${amount}`, origin, { size });

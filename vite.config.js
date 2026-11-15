@@ -1,4 +1,5 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
+import { createAiMiddleware } from "./server/ai.js";
 
 const kaplayCongrats = () => {
     return {
@@ -13,7 +14,22 @@ const kaplayCongrats = () => {
     };
 };
 
-export default defineConfig({
+// Serves /api/turn, /api/speak and /api/narrate from the dev and preview servers,
+// so the Gemini and ElevenLabs keys in .env are used here and never sent to the browser.
+const aiEndpoints = (/** @type {Record<string, string>} */ env) => {
+    const middleware = createAiMiddleware(env);
+    return {
+        name: "odyssey-ai-endpoints",
+        configureServer(/** @type {import("vite").ViteDevServer} */ server) {
+            server.middlewares.use(middleware);
+        },
+        configurePreviewServer(/** @type {import("vite").PreviewServer} */ server) {
+            server.middlewares.use(middleware);
+        },
+    };
+};
+
+export default defineConfig(({ mode }) => ({
     // index.html out file will start with a relative path for script
     base: "./",
     server: {
@@ -34,5 +50,7 @@ export default defineConfig({
     plugins: [
         // Disable messages removing this line
         kaplayCongrats(),
+        // "" = read every variable in .env, not only the VITE_ ones (these stay on the server)
+        aiEndpoints(loadEnv(mode, process.cwd(), "")),
     ],
-});
+}));

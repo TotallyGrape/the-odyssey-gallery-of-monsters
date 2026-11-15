@@ -4,11 +4,15 @@
 //   addStoryScene();                       once: registers the "story" scene
 //   showStory(story, () => go("battle"));  show a story, then run the callback after its last page
 //
-// A story is { title, pages }. Each page types itself out; a click or SPACE finishes the page,
+// A story is { title, pages }. Each page types itself out while the narrator reads it aloud (src/narration.js); a click or SPACE finishes the page,
 // and another moves to the next one. Don't use square brackets in pages: KAPLAY reads them as style tags.
 
 import { addGameBorder } from "./border.js";
+import { playSfx } from "./sfx.js";
 import { GAME_FONT, addTitle } from "./font.js";
+import { playSceneMusic } from "./music.js";
+import { narrate, preloadNarration, stopNarration } from "./narration.js";
+import { addSettingsButton, settingsBlocksInput } from "./settings.js";
 
 /** @typedef {{ title: string, pages: string[] }} Story */
 
@@ -26,9 +30,13 @@ const HINT_SIZE = 22;
 /** Registers the "story" scene. */
 export function addStoryScene() {
     scene("story", (/** @type {Story} */ story, /** @type {() => void} */ onDone) => {
+        playSceneMusic("story");
         add([rect(width(), height()), color(0, 0, 0)]);
         addGameBorder();
         addTitle(story.title, TITLE_SIZE, vec2(width() / 2, TITLE_Y));
+
+        // Fetch the narrator's reading of each page in turn, so later pages start without a pause
+        story.pages.reduce((earlier, text) => earlier.then(() => preloadNarration(text)), Promise.resolve(/** @type {string | null} */ (null)));
 
         let pageIndex = 0;
         let lettersShown = 0;
@@ -63,16 +71,19 @@ export function addStoryScene() {
             hint.text = `${pageIndex + 1} / ${story.pages.length}   ${HINT}`;
             lettersShown = 0;
             rolling = true;
+            narrate(story.pages[pageIndex]); // replaces the previous page's reading
         }
 
         // Type the current page out
         loop(ROLL_INTERVAL, () => {
             if (!rolling) return;
             lettersShown++;
+            if (lettersShown % 3 === 0) playSfx("type"); // a tick every third letter
             if (lettersShown >= page.text.length) rolling = false;
         });
 
         function advance() {
+            if (settingsBlocksInput()) return; // the settings overlay is open, or this click was on its button
             if (time() - startedAt < INPUT_DELAY) return;
             if (rolling) {
                 // first press: show the whole page at once
@@ -80,8 +91,10 @@ export function addStoryScene() {
                 lettersShown = page.text.length;
             } else if (pageIndex < story.pages.length - 1) {
                 pageIndex++;
+                playSfx("page");
                 showPage();
             } else {
+                stopNarration();
                 onDone();
             }
         }
@@ -89,6 +102,7 @@ export function addStoryScene() {
         const startedAt = time();
         onKeyPress("space", advance);
         onClick(advance);
+        addSettingsButton();
         showPage();
     });
 }

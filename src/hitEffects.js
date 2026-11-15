@@ -1,3 +1,5 @@
+import { playSfx } from "./sfx.js";
+
 // Feedback for when the player takes a hit: a small screen shake and a soft red flash.
 // Kept deliberately gentle: one short fade (no strobing), low opacity, small shake.
 // Lower the numbers further, or set them to 0, to switch an effect off.
@@ -11,6 +13,7 @@ const FLASH_TIME = 0.45;     // seconds for the red to fade away
  * @param {number} [strength] 1 = normal hit. Bigger hits can pass more, capped so it never gets harsh.
  */
 export function playerHitEffect(strength = 1) {
+    playSfx("hurt");
     const amount = Math.min(strength, 1.5);
 
     shake(SHAKE_STRENGTH * amount);
