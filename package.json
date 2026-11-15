@@ -2,6 +2,7 @@
 	"name": "the-odyssey-gallery-of-monsters",
 	"type": "module",
 	"scripts": {
+		"start": "node --env-file-if-exists=.env server/index.js",
 		"build": "vite build",
 		"dev": "vite",
 		"preview": "vite preview",
