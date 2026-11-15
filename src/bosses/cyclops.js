@@ -3,7 +3,7 @@
 // blind him with exactly enough damage (the sweet spot), then FLEE.
 // Too little damage and the cave stays sealed; too much and it collapses.
 
-import { steps, TIERS } from "../encounter.js";
+import { steps, wardMove, TIERS } from "../encounter.js";
 
 /** @typedef {import("../encounter.js").BattleState} BattleState */
 /** @typedef {import("../encounter.js").MoveResult} MoveResult */
@@ -23,7 +23,8 @@ const HIDE_HEAL = 10;
 
 // ---- Helpers ----
 const blinded = (/** @type {BattleState} */ s) => s.damage >= SWEET_SPOT && s.damage < OVERKILL;
-const multiplier = (/** @type {BattleState} */ s) => MULTIPLIERS[Math.min(s.deception, MAX_DECEPTION)];
+// A prepared ploy (s.ready) counts as one more step of deception for the next strike, up to the same top multiplier
+const multiplier = (/** @type {BattleState} */ s) => MULTIPLIERS[Math.min(s.deception + s.ready, MAX_DECEPTION)];
 
 /** @returns {MoveResult} */
 const death = (/** @type {string} */ text) => ({ text, outcome: "death" });
@@ -38,6 +39,7 @@ function attack(s, g) {
     const dealt = Math.round(BASE_DAMAGE * multiplier(s) * g.power);
     s.damage += dealt;
     s.deception = 0;
+    s.ready = 0;
     if (s.damage >= OVERKILL) return death(`You deal ${dealt} damage. Overkill. His blind thrashing collapses the cave on top of you.`);
     if (s.damage >= SWEET_SPOT) {
         return {
@@ -74,11 +76,13 @@ export const CYCLOPS = {
         + "and is spent by it. He must be hurt enough to be blinded, but not so much that his thrashing collapses the cave. "
         + "While he can still see, every escape attempt fails. Once he is blinded the only way to live is to slip out quietly, "
         + "for example under the bellies of the rams: attacking again or making noise is fatal. Lying to him after he is fully deceived is fatal too.",
-    start: { hp: PLAYER_HP, damage: 0, deception: 0, hides: HIDES },
+    start: { hp: PLAYER_HP, damage: 0, deception: 0, hides: HIDES, ready: 0, ward: 0 },
     victoryText: "",
     hpDeath: "Your strength gives out. Polyphemus has his dinner.",
 
-    status: (s) => `Polyphemus   HP ${s.hp}   Deception ${s.deception} (x${multiplier(s)})   Damage ${s.damage}/${SWEET_SPOT}`,
+    status: (s) => `Polyphemus   HP ${s.hp}   Deception ${s.deception} (x${multiplier(s)})   Damage ${s.damage}/${SWEET_SPOT}`
+        + (s.ready ? "   Ploy ready" : "")
+        + (s.ward ? "   Braced" : ""),
 
     describe: (s) =>
         (blinded(s)
@@ -95,6 +99,8 @@ export const CYCLOPS = {
             const total = s.damage + Math.round(BASE_DAMAGE * multiplier(s) * grade.power);
             return `a ${tier} strike would ${total >= OVERKILL ? "bring the cave down and kill him" : total >= SWEET_SPOT ? "blind the cyclops" : "be too weak to blind the cyclops"}`;
         }).join("; ")}.`)
+        + (s.ready ? " A ploy is prepared, which is already counted in the strike forecast above." : "")
+        + (s.ward ? " Odysseus has some protection ready against the next blow." : "")
         + (s.hides > 0 ? "" : " There is nowhere left to hide."),
 
     counter: (s, mult) => {
@@ -141,6 +147,24 @@ export const CYCLOPS = {
                 };
             },
         },
+        ploy: {
+            action: "speak",
+            label: "Prepare a Ploy",
+            hint: "OPEN-ENDED ADVANTAGE. Any other cunning, physically possible preparation or distraction that is not deceiving him with words or gifts "
+                + "(for example: harden the stake's point in the fire, stampede the flock, fill the cave with smoke, post men to help drive the stake). "
+                + "The next strike lands as if he were one step more deceived (never above the top multiplier). On or off: it cannot be stacked. Fails if weak.",
+            keywords: ["heat", "harden", "sharpen", "smoke", "stampede", "distract", "prepare", "ready", "position", "ambush"],
+            when: (s) => !blinded(s) && s.ready === 0,
+            run: (s, g) => {
+                if (steps(g.power) === 0) return { text: "The idea comes to nothing." };
+                s.ready = 1;
+                return { text: "The ground is laid. Your next strike will land harder." };
+            },
+        },
+        ward: wardMove(
+            "shelter behind a boulder or the cheese racks, keep the fire between you and him, wrap your arm in fleece",
+            "You put something solid between yourself and his hands.",
+        ),
         shout: {
             action: "speak",
             label: "Taunt Him",

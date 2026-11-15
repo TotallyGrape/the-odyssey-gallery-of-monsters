@@ -3,17 +3,17 @@
 //   1. Stones   - a light hit. The safe turn to prepare.
 //   2. Boulder  - a heavy hit, unless you ordered the ships into shelter.
 //   3. Wade in  - a medium hit, but they are in the water and every attack does double.
-// Attacking every turn loses. The winning rhythm is prepare, shelter, strike.
+// Attacking blindly every turn costs most of the fleet. The winning rhythm is prepare, shelter, strike.
 // What you say gives the orders that set a turn up; FIGHT is where the setup pays off.
 
-import { steps } from "../encounter.js";
+import { steps, wardMove, EDGE_MULTIPLIER } from "../encounter.js";
 
 /** @typedef {import("../encounter.js").BattleState} BattleState */
 /** @typedef {import("../encounter.js").MoveResult} MoveResult */
 /** @typedef {import("../encounter.js").Grade} Grade */
 
 // ---- Numbers ----
-const BOSS_HP = 120;
+const BOSS_HP = 110;
 const CREW_HP = 100;
 const VOLLEY_DAMAGE = 12;
 const SPEAR_DAMAGE = 20;
@@ -21,16 +21,16 @@ const SPEAR_EXTRA_COUNTER = 10; // extra crew lost on the giants' next move afte
 const EXPOSED_MULTIPLIER = 2;   // all attacks, while the giants are wading in
 const FIRE_MULTIPLIER = 2;      // Arrow Volley only, when fire arrows are ready
 const SHELTER_REDUCTION = 0.5;  // shelter halves stones and wading hits (and blocks the boulder entirely)
-const FLEE_LOSS = 30;
+const FLEE_LOSS = 25;
 const RESCUES = 2;              // how many times you can stop to pull men from the water
-const RESCUE_HEAL = 8;
+const RESCUE_HEAL = 10;
 
 // The giants' moves, in the order they repeat. `plan` is what the scouts report in the text box.
 const STONES = 0, BOULDER = 1, WADE = 2;
 const MOVES = [
-    { damage: 8, plan: "they are gathering stones", text: "Stones rain down from the cliffs." },
-    { damage: 30, plan: "they are lifting a boulder", text: "A boulder the size of a house crushes a ship." },
-    { damage: 15, plan: "they are wading in, out in the open", text: "A giant wades in and spears men like fish." },
+    { damage: 6, plan: "they are gathering stones", text: "Stones rain down from the cliffs." },
+    { damage: 24, plan: "they are lifting a boulder", text: "A boulder the size of a house crushes a ship." },
+    { damage: 12, plan: "they are wading in, out in the open", text: "A giant wades in and spears men like fish." },
 ];
 
 // ---- Helpers ----
@@ -46,8 +46,9 @@ const exposed = (/** @type {BattleState} */ s) => s.phase === WADE;
  * @returns {MoveResult}
  */
 function strike(s, g, base, text) {
-    const dealt = Math.round(base * (exposed(s) ? EXPOSED_MULTIPLIER : 1) * g.power);
+    const dealt = Math.round(base * (exposed(s) ? EXPOSED_MULTIPLIER : 1) * (s.edge ? EDGE_MULTIPLIER : 1) * g.power);
     s.damage += dealt;
+    s.edge = 0;
     return { text: `${text} ${exposed(s) ? "They are in the open water. " : ""}You deal ${dealt} damage.` };
 }
 
@@ -72,12 +73,12 @@ export const GIANTS = {
         + "There are harbour rocks to shelter behind, pitch and fire for arrows, and a cliff path scouts could climb.",
     rules:
         "The giants repeat three moves in order: stones (a light hit), a boulder (a heavy hit), then wading in (a medium hit, "
-        + "but while they are in the water every attack on them does double). Attacking every turn loses. "
+        + "but while they are in the water every attack on them does double). Attacking blindly every turn costs most of the fleet. "
         + "Taking shelter blocks the boulder completely and halves the other hits for that turn. Fire arrows double the next volley. "
         + "Scouts report what the giants will do next. A spear charge hits hard but leaves the men exposed to the giants' next move. "
         + "A feigned surrender lures the giants into the water early, once. Fleeing fails: the harbour mouth is closed by boulders. "
         + "The fight is won when the giants have taken enough damage.",
-    start: { hp: CREW_HP, damage: 0, phase: STONES, scouted: 0, fire: 0, shelter: 0, reckless: 0, feint: 1, rescues: RESCUES },
+    start: { hp: CREW_HP, damage: 0, phase: STONES, scouted: 0, fire: 0, shelter: 0, reckless: 0, feint: 1, rescues: RESCUES, edge: 0, ward: 0 },
     bossHp: BOSS_HP,
     victoryText: "The last giant sinks beneath the harbour. You row for open sea.",
     hpDeath: "The last ship breaks apart. The giants wade out to collect the crew.",
@@ -85,6 +86,8 @@ export const GIANTS = {
     status: (s) =>
         `Giants ${remaining(s)}/${BOSS_HP}   Crew ${s.hp}`
         + (s.fire ? "   Fire arrows ready" : "")
+        + (s.edge ? "   Ploy ready" : "")
+        + (s.ward ? "   Braced" : "")
         + (s.scouted ? `   Scouts: ${MOVES[s.phase].plan}` : ""),
 
     describe: (s) =>
@@ -92,6 +95,8 @@ export const GIANTS = {
         + ` Their next move: ${MOVES[s.phase].plan}${exposed(s) ? " - this is the moment to attack" : ""}.`
         + (s.scouted ? " Scouts are posted, so Odysseus knows this." : " No scouts are posted, so Odysseus cannot be sure what comes next.")
         + (s.fire ? " Fire arrows are lit and ready." : "")
+        + (s.edge ? " A ploy is prepared: the next attack will land harder." : "")
+        + (s.ward ? " The fleet has some protection ready against the next blow." : "")
         + (s.feint ? "" : " The giants will not fall for a false surrender again.")
         + (s.rescues > 0 ? "" : " There is no time left to rescue swimmers."),
 
@@ -170,6 +175,24 @@ export const GIANTS = {
                 return { text: "You order the ships in behind the harbour rocks." };
             },
         },
+        ploy: {
+            action: "speak",
+            label: "Prepare a Ploy",
+            hint: "OPEN-ENDED ADVANTAGE. Any other clever, physically possible trick, preparation or use of the ships and the harbour that is not one of the listed moves "
+                + "(for example: string a cable between ships to trip the waders, set an empty ship alight as a fireship, hide men in the shallows, blind them with smoke). "
+                + `The next attack does ${EDGE_MULTIPLIER} times the damage. On or off: it cannot be stacked. Fails if weak.`,
+            keywords: ["cable", "trip", "fireship", "smoke", "trap", "ambush", "net", "rope", "prepare", "decoy"],
+            when: (s) => s.edge === 0,
+            run: (s, g) => {
+                if (steps(g.power) === 0) return { text: "The idea comes to nothing under the falling stone." };
+                s.edge = 1;
+                return { text: "The trap is set. Your next attack will land harder." };
+            },
+        },
+        ward: wardMove(
+            "scatter the ships so no boulder takes two, raise screens of wet hides, send the men below decks",
+            "The crews make themselves a harder target.",
+        ),
         feint: {
             action: "speak",
             label: "Feign Surrender",

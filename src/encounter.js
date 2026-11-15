@@ -9,7 +9,8 @@
 //   - FIGHT and FLEE: it offers a few options. Each option is a label, one of the boss's moves,
 //     and a risk tier (TIERS below).
 //   - SPEAK: the player types anything. The AI reads it as one of the boss's moves and judges
-//     how good an idea it was (QUALITIES below).
+//     how good an idea it was (QUALITIES below). Each boss also has two open-ended moves, "ploy"
+//     and "ward", so that any reasonable idea the player invents has a fixed, bounded effect.
 // Either way the turn then runs here: the move changes the numbers, the boss hits back,
 // and the engine checks whether the fight is over.
 //
@@ -86,6 +87,34 @@ export const QUALITIES = /** @type {Record<string, Grade>} */ ({
 /** @typedef {{ label: string, move: string, tier: Tier }} Option */
 
 /** @typedef {{ state: BattleState, text: string, outcome: Outcome, damageDealt: number, hpLost: number }} TurnResult */
+
+/** How much of the enemy's next hit gets through when the player has improvised some protection (state.ward). */
+export const WARD_REDUCTION = 0.5;
+/** How much harder the next attack lands after an improvised ploy (state.edge), for bosses that use it. */
+export const EDGE_MULTIPLIER = 1.5;
+
+/**
+ * The open-ended defensive move every boss offers: any sensible way the player invents to blunt the
+ * enemy's next blow. It sets state.ward, which resolveMove() spends on the next hit. On or off, so it can't be stacked.
+ * @param {string} examples in-world examples for the AI, e.g. "overturn a table, douse the fire"
+ * @param {string} text     plain account of it working
+ * @returns {Move}
+ */
+export function wardMove(examples, text) {
+    return {
+        action: "speak",
+        label: "Take Cover",
+        hint: `OPEN-ENDED DEFENCE. Any other sensible, physically possible way to protect against the enemy's next blow that is not one of the listed moves (for example: ${examples}). `
+            + `The enemy's next hit is reduced to ${WARD_REDUCTION * 100}%. On or off: it cannot be stacked. Fails if weak.`,
+        keywords: ["cover", "shield", "block", "dodge", "barricade", "protect", "defend", "brace"],
+        when: (s) => s.ward === 0,
+        run: (s, g) => {
+            if (steps(g.power) === 0) return { text: "It does little good." };
+            s.ward = 1;
+            return { text };
+        },
+    };
+}
 
 /** The move used when typed words fit nothing the boss allows: nothing happens, and the boss acts. */
 export const NO_MOVE = "none";
@@ -295,7 +324,12 @@ export function resolveMove(boss, state, moveId, grade) {
         return end("victory");
     }
 
-    if (next.hp > 0 && result.counter !== false) text += ` ${boss.counter(next, grade.counter)}`;
+    if (next.hp > 0 && result.counter !== false) {
+        // Improvised protection takes the edge off this hit, and is used up by it
+        const warded = next.ward === 1;
+        text += ` ${boss.counter(next, grade.counter * (warded ? WARD_REDUCTION : 1))}`;
+        if (warded) next.ward = 0;
+    }
 
     if (next.hp <= 0) {
         text += ` ${boss.hpDeath}`;

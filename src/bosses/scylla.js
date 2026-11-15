@@ -5,7 +5,7 @@
 //   enraged  - doubles your next hit, but her counterattacks are doubled until you land it
 //   guard    - blocks her next counterattack
 
-import { steps } from "../encounter.js";
+import { steps, wardMove, EDGE_MULTIPLIER } from "../encounter.js";
 
 /** @typedef {import("../encounter.js").BattleState} BattleState */
 /** @typedef {import("../encounter.js").MoveResult} MoveResult */
@@ -40,9 +40,10 @@ const courageMultiplier = (/** @type {BattleState} */ s) => COURAGE_MULTIPLIERS[
  * @returns {MoveResult}
  */
 function strike(s, g, base, text) {
-    const dealt = Math.round(base * courageMultiplier(s) * (s.enraged ? ENRAGED_MULTIPLIER : 1) * g.power);
+    const dealt = Math.round(base * courageMultiplier(s) * (s.enraged ? ENRAGED_MULTIPLIER : 1) * (s.edge ? EDGE_MULTIPLIER : 1) * g.power);
     s.damage += dealt;
     s.enraged = 0;
+    s.edge = 0;
     return { text: `${text} You deal ${dealt} damage.` };
 }
 
@@ -71,7 +72,7 @@ export const SCYLLA = {
         + "Athena answers a prayer only twice: she turns aside the next blow and steadies the crew. "
         + "Taunting Scylla enrages her: the next hit on her is doubled but so are her strikes until it lands, and taunting twice is a disaster. "
         + "Begging costs men and all courage. When she is nearly dead a finishing blow ends it.",
-    start: { hp: CREW_HP, damage: 0, courage: 0, insight: 0, enraged: 0, guard: 0, prayers: PRAYERS },
+    start: { hp: CREW_HP, damage: 0, courage: 0, insight: 0, enraged: 0, guard: 0, prayers: PRAYERS, edge: 0, ward: 0 },
     bossHp: BOSS_HP,
     victoryText: "The last head falls into the sea. The strait is yours.",
     hpDeath: "The last of your crew is gone. Scylla takes the ship.",
@@ -80,6 +81,8 @@ export const SCYLLA = {
         `Scylla ${remaining(s)}/${BOSS_HP}   Crew ${s.hp}   Courage ${s.courage} (x${courageMultiplier(s)})`
         + (s.insight ? "   Insight" : "")
         + (s.guard ? "   Guarded" : "")
+        + (s.edge ? "   Ploy ready" : "")
+        + (s.ward ? "   Braced" : "")
         + (s.enraged ? "   ENRAGED" : ""),
 
     describe: (s) =>
@@ -88,6 +91,8 @@ export const SCYLLA = {
         + (s.insight ? " Odysseus knows the necks are her weak point." : " Odysseus has not yet recalled where she is weak.")
         + (s.enraged ? " She is ENRAGED: her strikes are doubled until the next blow lands on her, which will be doubled too." : "")
         + (s.guard ? " Her next strike will be turned aside." : "")
+        + (s.edge ? " A ploy is prepared: the next attack on her will land harder." : "")
+        + (s.ward ? " The crew has some protection ready against her next strike." : "")
         + (s.prayers > 0 ? "" : " Athena will answer no more prayers."),
 
     counter: (s, mult) => {
@@ -164,6 +169,24 @@ export const SCYLLA = {
                 return { text: "You pray to Athena. The crew steadies." };
             },
         },
+        ploy: {
+            action: "speak",
+            label: "Prepare a Ploy",
+            hint: "OPEN-ENDED ADVANTAGE. Any other clever, physically possible trick, preparation or use of the ship and the strait that is not one of the listed moves "
+                + "(for example: bait a head with a carcass on a hook, lash spears together into pikes, steer so the heads tangle, throw a net or burning pitch). "
+                + `The next attack on her does ${EDGE_MULTIPLIER} times the damage. On or off: it cannot be stacked. Fails if weak.`,
+            keywords: ["bait", "net", "hook", "trap", "lash", "tangle", "pitch", "prepare", "lure", "decoy", "rope"],
+            when: (s) => s.edge === 0,
+            run: (s, g) => {
+                if (steps(g.power) === 0) return { text: "The idea comes to nothing in the chaos." };
+                s.edge = 1;
+                return { text: "It works. For a moment she is open, and your next blow will land harder." };
+            },
+        },
+        ward: wardMove(
+            "raise a roof of shields and oars, hug the far side of the channel, rig the sail as a screen",
+            "The crew gets something between themselves and the teeth.",
+        ),
         taunt: {
             action: "speak",
             label: "Taunt Scylla",
