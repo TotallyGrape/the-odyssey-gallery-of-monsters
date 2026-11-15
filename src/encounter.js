@@ -33,6 +33,7 @@
  * @typedef {Object} Boss
  * @property {string} name
  * @property {string} sprite                        name of a loaded sprite
+ * @property {{ title: string, pages: string[] }} story  shown before the fight (see src/transition.js)
  * @property {string} intro                         shown when the fight starts
  * @property {BattleState} start                    starting numbers; must include hp and damage
  * @property {number} [bossHp]                      if set, reaching this much damage wins the fight

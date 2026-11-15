@@ -46,6 +46,14 @@ function strike(s, base, text) {
 export const SCYLLA = {
     name: "Scylla",
     sprite: "scylla",
+    story: {
+        title: "THE STRAIT",
+        pages: [
+            "The cyclops has a father. His name is Poseidon, and the sea has been against you ever since.",
+            "The witch Circe gave one warning before you sailed. The strait ahead has a whirlpool on one side and Scylla on the other. Six heads. Six men, every time.",
+            "There is no way around. Keep the crew's courage up, remember what Circe told you, and do not turn the ship.",
+        ],
+    },
     intro: "The strait narrows. Six heads uncoil from the cliff above your ship.",
     start: { hp: CREW_HP, damage: 0, courage: 0, insight: 0, enraged: 0, guard: 0, prayers: PRAYERS },
     bossHp: BOSS_HP,

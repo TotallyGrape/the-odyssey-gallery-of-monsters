@@ -14,13 +14,18 @@ const BUTTON_MIN_SIZE = { x: 128, y: 64 }; // auto-sized buttons are never small
  * @param {import("kaplay").Vec2} p centre of the button
  * @param {import("kaplay").Vec2 | null} s size of the button; pass null to fit the size to the text
  * @param {() => void} f called when the button is clicked
+ * @param {{ fill?: number[], text?: number[] }} [colors] button and text colours as [r, g, b]; white with black text if left out
  */
 export function addButton(
     txt = "start game",
     p = vec2(200, 100),
     s = null,
     f = () => debug.log("hello"),
+    colors = {},
 ) {
+    const fill = colors.fill ?? [255, 255, 255];
+    const ink = colors.text ?? [0, 0, 0];
+
     // No size given: measure the text and wrap the button around it
     if (!s) {
         const measured = formatText({ text: txt, font: BUTTON_FONT, size: BUTTON_TEXT_SIZE });
@@ -38,8 +43,8 @@ export function addButton(
         scale(1),
         rotate(0), // gives the button an angle we can animate
         anchor("center"),
-        outline(4),
-        color(255, 255, 255),
+        outline(4, rgb(ink[0], ink[1], ink[2])),
+        color(fill[0], fill[1], fill[2]),
     ]);
 
     // add a child object that displays the text
@@ -50,7 +55,7 @@ export function addButton(
         }),
         
         anchor("center"),
-        color(0, 0, 0),
+        color(ink[0], ink[1], ink[2]),
     ]);
 
     // onHoverUpdate() comes from area() component

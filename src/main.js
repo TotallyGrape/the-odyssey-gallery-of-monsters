@@ -4,14 +4,32 @@ import { addButton } from "./button.js";
 import { newBattleState, getChoices, resolveChoice } from "./encounter.js";
 import { CYCLOPS } from "./bosses/cyclops.js";
 import { SCYLLA } from "./bosses/scylla.js";
+import { GIANTS } from "./bosses/giants.js";
 import { popDamage } from "./textParticles.js";
 import { playerHitEffect } from "./hitEffects.js";
 import { loadMonotone, setMonotone } from "./monotone.js";
 import { GAME_FONT, loadGameFont } from "./font.js";
+import { BORDER_WIDTH, addGameBorder } from "./border.js";
+import { addEndScreens, fadeToEndScreen } from "./endScreens.js";
+import { loadMainMenu, addMainMenu } from "./mainMenu.js";
+import { addStoryScene, showStory } from "./transition.js";
 
 
-// The boss the battle scene fights. Change this one line to switch: CYCLOPS or SCYLLA.
-const CURRENT_BOSS = SCYLLA;
+// The levels, in the order they are played. Reorder, add or remove bosses here.
+const LEVELS = [CYCLOPS, SCYLLA, GIANTS];
+
+// Shown after the last level is won, before returning to the main menu.
+/** @type {import("./transition.js").Story} */
+const ENDING = {
+    title: "ITHACA",
+    pages: [
+        "The harbour falls behind. For the first time since Troy, nothing is chasing you.",
+        "The sea still takes its time. Years pass, and friends are lost. But the wind, at last, blows toward Ithaca.",
+        "Odysseus steps onto his own shore dressed as a beggar, strings his own bow, and takes back his own hall. Penelope tests him once, to be sure. He passes.",
+        "Twenty years, a cyclops, a monster and a harbour of giants. He is home.",
+        "THE END",
+    ],
+};
 
 export const k = kaplay({
     background: [0, 0, 0],
@@ -19,6 +37,8 @@ export const k = kaplay({
     width: 1280,
     height: 720,
     letterbox: true,
+    // Smooth the final image when the fixed game area scales to the window.
+    texFilter: "linear",
 });
 onUpdate(() => setCursor("default"));
 k.loadRoot("./"); // A good idea for Itch.io publishing later
@@ -40,7 +60,6 @@ loadSprite("scylla", "assets/Scylla.png");
 loadSprite("frame", "assets/picture-frame-427233_1280.jpg");
 
 const BOSS_PIC_HEIGHT = 520; // on-screen height of the boss picture; the width follows the image's shape
-const BORDER_WIDTH = 6;      // white frame around the game area
 
 // The part of the frame image the boss picture covers, as fractions of the frame image
 // (0 = left/top edge, 1 = right/bottom edge). The frame is sized so this area matches the boss picture.
@@ -51,6 +70,39 @@ const MONOTONE_COLOR = [55, 120, 255]; // red, green, blue (0-255). Blue to star
 const MONOTONE_AMOUNT = 1;             // 0 = normal colours, 1 = fully monotone
 loadMonotone();
 setMonotone(rgb(MONOTONE_COLOR[0], MONOTONE_COLOR[1], MONOTONE_COLOR[2]), MONOTONE_AMOUNT);
+
+// ---- Level flow ----
+// menu -> story -> fight -> victory -> next story -> ... -> ending story -> menu
+let level = 0; // index into LEVELS of the level being played
+
+/** Shows a level's story, then starts its fight. */
+function startLevel() {
+    const boss = LEVELS[level];
+    showStory(boss.story, () => go("battle", boss));
+}
+
+/**
+ * Called when CONTINUE is clicked on the death or victory screen.
+ * @param {"death" | "victory"} kind which screen the button was on
+ */
+function onContinue(kind) {
+    if (kind === "death") {
+        go("battle", LEVELS[level]); // try the same fight again, without repeating the story
+        return;
+    }
+    level++;
+    if (level < LEVELS.length) startLevel();
+    else showStory(ENDING, () => go("menu")); // the last level is won: tell the ending, then back to the menu
+}
+addEndScreens(onContinue);
+addStoryScene();
+
+// Main menu (src/mainMenu.js): PLAY starts from the first level
+loadMainMenu();
+addMainMenu(() => {
+    level = 0;
+    startLevel();
+});
 
 scene("battle", (/** @type {import("./encounter.js").Boss} */ boss) => {
     // Painting frame, added first so the boss picture is drawn on top of its blank centre
@@ -84,14 +136,7 @@ scene("battle", (/** @type {import("./encounter.js").Boss} */ boss) => {
     );
     const picCenter = pic.pos.add(0, BOSS_PIC_HEIGHT / 2);
 
-    // Frame around the game area, drawn on top of everything
-    add([
-        rect(k.width() - BORDER_WIDTH, k.height() - BORDER_WIDTH, { fill: false }),
-        pos(BORDER_WIDTH / 2, BORDER_WIDTH / 2),
-        outline(BORDER_WIDTH, rgb(255, 255, 255)),
-        fixed(),
-        z(3000),
-    ]);
+    addGameBorder(); // white frame around the game area (src/border.js)
 
     // ---- Fight state ----
     let state = newBattleState(boss);
@@ -269,11 +314,9 @@ scene("battle", (/** @type {import("./encounter.js").Boss} */ boss) => {
 
         text_roll(result.text, () => {
             if (result.outcome !== "continue") {
-                // For now: a debug message, then the fight starts over
-                debug.log(result.outcome === "victory" ? `VICTORY over ${boss.name}` : `DEATH: ${result.text}`);
-                console.log("Battle ended:", result.outcome, "-", result.text);
-                state = newBattleState(boss);
-                updateStatus();
+                // The fight is over: fade out to the death or victory screen (src/endScreens.js)
+                fadeToEndScreen(result.outcome);
+                return;
             }
             showMainMenu();
         });
@@ -441,4 +484,4 @@ scene("battle", (/** @type {import("./encounter.js").Boss} */ boss) => {
     }
 
 });
-k.onLoad(() => k.go("battle", CURRENT_BOSS));
+k.onLoad(() => k.go("menu"));

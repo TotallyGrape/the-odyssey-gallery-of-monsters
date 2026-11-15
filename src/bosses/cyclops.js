@@ -61,6 +61,15 @@ const deceive = (level, label, text) => ({
 export const CYCLOPS = {
     name: "Polyphemus",
     sprite: "cyclops",
+    story: {
+        title: "THE CAVE",
+        pages: [
+            "Troy has fallen. After ten years of war, Odysseus turns his ships toward Ithaca and home.",
+            "On a nameless island his men find a cave full of cheese and lambs, and help themselves. Then the owner comes home and rolls a boulder across the door.",
+            "Polyphemus the cyclops has one eye, no manners and a taste for sailors. He cannot be beaten by strength. He can be fooled.",
+            "Talk him off his guard, strike once, and get out. Kill him, and no one is left to move the boulder.",
+        ],
+    },
     intro: "The cave is sealed. Polyphemus the cyclops looms over you.",
     start: { hp: PLAYER_HP, damage: 0, deception: 0 },
     victoryText: "",
